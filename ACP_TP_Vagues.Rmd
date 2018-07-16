@@ -1,0 +1,565 @@
+---
+title: "Surfs up !"
+author: "Meriem MICHAUT, Dan COSTIN, Sarah MADELEINE"
+date: "12/19/2017"
+output: pdf_document
+source: Centre d’Archivage National de Données de Houle In Situ (CANDHIS)        
+---
+
+![Big wave surfer Paige Alms (http://www.korduroy.tv/wp-content/uploads/2014/01/paige.png)](paige.png)
+
+#1. Introduction
+Lors de ce travail nous allons utiliser un jeu de données de houle provenant de CANDHIS de manière à identifier différentes catégories de houle à partir de leurs caractéristiques. Nous allons ainsi utiliser des techniques d’analyse multidimensionnelle telles que l’ ACP et la PCR entre autres que l'on va comparer à une régression linéaire multiple, la PLSR et la LDA.\par
+\pagebreak
+\setlength{\parindent}{10ex}
+Tout au long de ce projet, nous allons avoir besoin de différents packages qui ont été insérés dans cette section. 
+
+```{r message=FALSE, warning = FALSE, echo = TRUE}
+library(FactoMineR)
+library(factoextra)
+library(dplyr)
+library(pls)
+library(mda802)
+library(MASS)
+library(scales)
+library(ggplot2)
+```
+
+# 2. Importation et exploration des données 
+
+\setlength{\parindent}{10ex}Dans un premier temps, nous devons concaténer toutes les données des fichiers CSV pour construire une base de données complète `X` contenant tous les fichiers `test` et les fichiers `train`. La récupération de tous les fichiers s’est faite à l'aide de la fonction `read.csv2()` et la concaténation en une seule matrice `X` à l'aide de la fonction `rbind()`. Les données sont en suite partagées en deux variables : `train` et  `test`.\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+filenames <- c(
+"group7/pem_02B04-test.csv", "group7/pem_02B04-train.csv", "group7/pem_01101-test.csv",
+"group7/pem_01101-train.csv", "group7/pem_01305-test.csv", "group7/pem_01305-train.csv",
+"group7/pem_01704-test.csv", "group7/pem_01704-train.csv", "group7/pem_02204-test.csv",
+"group7/pem_02204-train.csv", "group7/pem_02911-test.csv", "group7/pem_02911-train.csv",
+"group7/pem_03404-test.csv", "group7/pem_03404-train.csv", "group7/pem_04403-test.csv",
+"group7/pem_04403-train.csv", "group7/pem_05008-test.csv", "group7/pem_05008-train.csv",
+"group7/pem_05602-test.csv", "group7/pem_05602-train.csv", "group7/pem_06402-test.csv",
+"group7/pem_06402-train.csv", "group7/pem_06601-test.csv", "group7/pem_06601-train.csv",
+"group7/pem_08504-test.csv", "group7/pem_08504-train.csv", "group7/pem_98000-test.csv",
+ "group7/pem_98000-train.csv" )
+
+
+
+X <- NULL
+     for(i in 1:28){
+        a <- read.csv2(filenames[i], header=T, stringsAsFactors=F, row.names= 1)
+        X <- rbind(X,a)
+     }
+
+dim(X)
+head(X)
+View(X)
+glimpse(X)
+typeof(X)
+
+```
+\setlength{\parindent}{10ex}On remarque que le nombre de variables (69) est largement supérieur au nombre d'individus (42). Nous devons donc effectuer une réduction de dimensions pour pouvoir effectuer une analyse det éviter un surapprentissage du modèle.\par
+
+\setlength{\parindent}{10ex}Par ailleurs, on remarque que `X` contient un certain nombre de variables ne contenant que des valeurs NA, il s'agit des colonnes de 29 à 69. On procède donc au retrait de ces variables inutiles en ne récupérant que les 28 premières colonnes.\par
+
+\setlength{\parindent}{10ex}De manière à gagner en efficacité on crée les jeux de données `train` et `test` et on applique une fonction adaptée à la mise en forme `custom_clean` sur nos trois jeux de données `X`, `train`, et `test`. Cette fonction retire les variables contenant que des valeurs manquantes `NA`, declare la variable `dateheure` comme type `data` et remplace les quelques valeurs manquantes des variables `thetam`, `thetap`, `sigmam` et `sigmap` par la moyenne respective à chaque variable.\par 
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+index_test <- seq(from = 1, to = 27, by = 2)
+index_train <- seq(from = 2, to = 28, by = 2)
+
+test <- NULL
+        for(i in index_test){
+          a <- read.csv2(filenames[i], header=T, stringsAsFactors=F, row.names= 1)
+          test <- rbind(test,a)
+                          }  
+
+train <- NULL
+        for(i in index_train){
+          a <- read.csv2(filenames[i], header=T, stringsAsFactors=F, row.names= 1)
+          train <- rbind(train,a)
+        }
+
+custom_clean <- function(df){
+  df <- df[,1:28]
+  df$dateheure <- as.Date(df$dateheure)
+  df$thetap[is.na(df$thetap)] <- round(mean(df$thetap, na.rm=TRUE))
+  df$thetam[is.na(df$thetam)] <- round(mean(df$thetam, na.rm=TRUE))
+  df$sigmap[is.na(df$sigmap)] <- round(mean(df$sigmap, na.rm=TRUE))
+  df$sigmam[is.na(df$sigmam)] <- round(mean(df$sigmam, na.rm=TRUE))
+  return(df)
+}
+
+X <- custom_clean(X)
+test <- custom_clean(test)
+train <- custom_clean(train)
+
+glimpse(X)
+glimpse(train)
+glimpse(test)
+```
+
+
+##2.1 visualisation des variables
+La visualisation des boxplots de chaque variable nous montre que 6 variables ont des valeurs qui semblent aberrantes:"sz13d", "szmaxd", "tszmaxd", "kurt", "kapa", "sigmap" \par
+
+* sz13d  : cambrure significative des vagues (1)
+* szmaxd : cambrure maximale des vagues (1)
+* tszmaxd: période de la vague de cambrure maximale (4)
+* kurt   : kurtosis (coefficient d'applatissement) de l'élévation de la surface libre (1)
+* kapa   : largeur spectrale (1)
+* sigmap : largeur directionnelle du pic (2)
+
+On sait que les 4 premières variables sont corrélées. En effet, le `kurtosis` étant le coefficient d'applatissement de l'élévation de la surface libre d'une vague, il est en totale corrélation avec la cambrure maximale d'une vague. Quant aux 3 premières variables, il n'y a pas besoin d'expliquer le type de corrélation qui les lie, elle paraît évidente. Ce qui expliquerait qu'une valeur aberrante apparaisse chez les 4 au même moment de prélèvement.
+
+```{r warning= F, error=F, echo=T, message=F, eval=F, results='hide'}
+for(x in 2:28 ){ boxplot(x = X[,x])}
+ylabs <- names(X)
+for(i in 2:28 ){plot(x= X$dateheure, y=X[,i], ylab = ylabs[i])}
+```
+##2.2 Detection de points atypiques/influents:
+###2.2.1. Test de l'Effet levier:
+Calcul de l'effet levier: construire la matrice Hat : H= X(X'X)^(-1)X'\par
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+X_quanti <- as.matrix(X[,2:28])
+H = X_quanti %*% solve(t(X_quanti) %*% X_quanti) %*% t(X_quanti)
+dim(H)
+Hii = diag(H)
+Hii
+```
+\setlength{\parindent}{10ex}Calcul de la borne de l'effet levier:\par
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+borne= (2*(28+1))/42 
+borne
+```
+\setlength{\parindent}{10ex}On remarque qu'aucune des valeurs de Hii n'est supérieure à la borne de l'effet levier qui vaut 1.38
+Il n'y a donc pas de point influent au sens de l'effet levier. \par
+
+###2.2.2 Test des Résidus studentisés:
+Une autre méthode de détection des points aberrants est de studentiser les résidus du modèle de régression linéaire.
+On procède donc à une régression linéaire et on studentise ses résidus:\par
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+reg = lm(X$h13d ~., data= X[,3:28])
+res = X$h13d - reg$fitted.values
+rstand = res/(1-Hii)
+rstand
+```
+\setlength{\parindent}{10ex}On remarque que toutes les valeurs de rstand sont inférieures en valeur absolue à 2. La studentisation des résidus ne montre donc aucune valeur influente.\par
+
+###2.2.3 Test de la Distance de Cook:
+\setlength{\parindent}{10ex}Il nous reste un dernier test à effectuer pour détecter des valeurs influentes: test de la distance de Cook. \par
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+dist_cook = (Hii*rstand^2) / ((1-Hii)*(1+28))
+dist_cook
+```
+\setlength{\parindent}{10ex}On remarque qu'aucune valeur n'est supérieure à 1.
+Le test de la distance de Cook confirme donc les 2 précédents tests, à savoir: les valeurs aberrantes exposées par les boxplots ne sont pas des valeurs influentes. Nous pouvons donc les conserver.\par
+
+
+#3. Analyse en composantes principales:
+
+Plutôt que d'utiliser la fonction 'sample' pour séparer les données, on a préféré récupérer les données déjà séparées dans les deux jeux de données `test` et `train`.\par
+
+\setlength{\parindent}{10ex}On effectue une standardisation des données de manière à accorder la même importance lors de l'ACP à toutes les variables. Standardisation à n'effectuer que sur les variables quantitatives, on omet donc la variable `dateheure`. Egalement nous avons transformé nos données en matrice pour pouvoir effectuer l'ACP\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+X_stand <- X
+test_stand <- test
+train_stand <- train
+standardisation <- function(x) { (x - mean(x)) /sd (x)}
+
+test_stand[,2:28] <- t(apply(test[,2:28], MARGIN = 1, FUN=standardisation))
+train_stand[,2:28] <- t(apply(train[,2:28], MARGIN = 1, FUN=standardisation))
+X_stand[,2:28] <-  t(apply(X[,2:28], MARGIN = 1, FUN=standardisation))
+
+train_stand[,2:28] <- as.matrix(train_stand[,2:28])
+test_stand[,2:28] <- as.matrix(test_stand[,2:28])
+X_stand[,2:28] <- as.matrix(X_stand[,2:28])
+
+train_in_X <- which(X$dateheure == "2016-10-04")
+test_in_X <- which(X$dateheure == "2016-10-05") 
+```
+\setlength{\parindent}{10ex}On remarque que l'on a deux valeurs pour la variable `dateheure` : `2016-10-04` corespondant au  jeu de données `train` et `2016-10-04` corespondant au  jeux de données `test`. Cela peut nous permettre par la suite de sélectionner directement à partir de `X` le jeu de données `train` ou `test` à l’aide de leur index.\par
+\setlength{\parindent}{10ex}Nous effectuons dans un premier temps une ACP sur l’ensemble de données `X` en déclarant la colonne `datehure` comme variable qualitative. En suite on effectue une ACP sur  `X` en declarant comme individus supplémentaires ceux du jeux de données `test`. La comparaison des résultats des deux ACP peut nous informer sur la robustesse du modèle.\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+pca_X = PCA(X_stand, ncp=5, scale.unit=T, graph=F, quali.sup = 1)
+pca_indsup_test <- PCA(X_stand[,2:28], ncp = 5, scale.unit = TRUE, graph=FALSE,
+                       ind.sup = test_in_X)
+fviz_pca_biplot(pca_X, axes=c(1,2), repel=FALSE, col.var="blue",  habillage = 1 )
+```
+
+##3.1 Interprétation du graphe des variables
+On observe du graphe des variables 4 groupes de variables corrélées entre elles:\par
+
+1. un groupe bien représenté par la dimension 1 de façon positive:
+"thetap", "h13d", "hmaxd", "h2percentd", "h110d", "hrmsd", "etamax", "etamin", "sz13d", "szmaxd", "tszmaxd", "skew", "rhh", "eps2", "kapa", "the tap"
+
+2. un groupe bien représenté par la dimension 2 de façon positive:
+"tmaxd", "thmaxd", "tavd", "t02", "tp", "th110d", "th13d" avec "tmaxd" anticorrélée aux autres par raport à la dimension 1
+
+3. un groupe bien représenté de façon négative par la dimension 1:
+"sigmap" et "sigmam" et qui sont anticorrélées aux variables du 1er groupe
+
+4. un groupe mal représenté dans les deux premières dimensions:
+"kurt" et "thetam". 
+Cependant, on remarque qu'elles sont toutes les deux très bien représentées dans le plan factoriel composé du 1er et 3 ème axe factoriel.
+
+5. La `variable `dateheure` ne permet pas une classification des données, les différences entre les deux groupes d’observations n’étant pas significatives. 
+\par
+
+L'observation du graphe nous montre que : la dimension 1 représente la hauteur des vagues et la dimension 2 représente la périodicité des vagues.
+
+##3.2 Interprétation du graphe des individus
+
+Les individus 35 et 34 sont très bien représentés en dimension 1 et sont corrélés négativement.
+Les individus 29, 30, 23, 26 22, 10, 11, 12, 15, 16, 19, 20, 33, 38, 22 forment un cluster . 
+Ils sont moyennement bien représentés en dimension 1, et mal représentés en dimension 2.
+Les individus 6, 8, 9, 20, 21 forment un cluster. Ils sont moyennement bien représentés en dimension 2 et mal représentés en dimension 1.
+
+Les individus 14 et 14 sont similaires et mal représentés dans les deux dimensions.
+Les individus 27 et 25 sont similaires et bien représentés dans les deux dimensions.
+Les individus 38 et 39 sont similaires. Ils sont bien représentés en dimension 2, mais mal en dimension 1.
+
+Les individus 41et 42 sont bien représenté dans les deux dimensions, et sont corrélés négativement aux individus 27 et 25 en dimension 2.
+
+Les individus 37 et 9 sont et mal représentés dans les deux dimensions.
+Les individus 35, 36, 3 et 34 sont bien représentés en dimension 1, mais assez mal en dimension 2.
+Les individus sont des mesures issues de bouées surfaciques. D'une manière générale, nous pouvons dire que les individus bien représentés en dimension 1 sont des mesures issues de bouées surfaciques spécialisées dans la mesure de la hauteur des vagues. Quant aux individus bien représentés en dimension 2, ils sont des mesures issues de bouées surfaciques spécialisées dans la mesure de la périodicité des vagues. Les individus mal représentés dans ces deux dimensions sont vraisemblablement des mesures issues de bouées surfaciques plus adaptées aux mesures directionnelles.
+
+##3.3 ACP train/test 
+En appliquant l’ACP sur les données `train` avec les données `test` comme individus supplémentaires on peut remarquer que le graphique des individus et des variables reste similaire.\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE }
+fviz_pca_biplot(pca_indsup_test, axes=c(1,2), repel=FALSE, col.var="green")
+```
+\setlength{\parindent}{10ex}On remarque que les points noirs corespondent aux observations `train` et que les points bleus corespondent aux observations `test` qui n’ont pas participé à l’analyse et figurent ici comme individus supplémentaires.
+
+Le seul changement notable est sur la variable `thetam` qui devient encore moins bien représentée dans le plan des deux premières dimensions. Toutefois les individus du jeu de données `test` restent bien représentés par les deux premières dimensions de l’ACP et toujours au même endroit par rapport aux individus `train` que dans le graphique initial sur l’ensemble des données `X`.\par
+
+
+
+
+
+
+##3.4. Choix du nombre de composantes principales:
+Pour voir le nombre optimal des composantes principales on regarde la table d’inertie de l’ACP sur l’ensemble des données..\par
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE , results= 'hide'}
+pca_X$eig
+```
+\setlength{\parindent}{10ex}D'après l'interprétation précédente et la table d'intertie, nous proposons de ne garder que les 3 premiers axes factoriels qui représentent 95% de l'inertie totale du nuage de points. Nous pouvons verifier cela en regardant la contribution des variables aux axes factoriels.
+\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results= 'hide'}
+pca_X$var$contrib
+```
+
+#4. Régression sur Composantes Principales (PCR):
+Afin d'étudier la variable endogène `h13d`, nous effectuons une régression linéaire sur composantes principales. Pour ce faire, nous utilisons les axes factoriels comme régrgesseurs. Nous récupèrons les coordonnées des individus dans les variables `train_proj` et `test_proj` et nous injectons ensuite à ces jeux de données la variable endogène `h13d`. Mais avant cela, nous modifions le jeu de données en data frame.\par 
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+res_pca_train = PCA(train_stand[,2:28], ncp=3, scale.unit=T, graph=F)
+res_pca_test = PCA(test_stand[,2:28], ncp=3, scale.unit=T, graph=F)
+train_proj = res_pca_train$ind$coord
+test_proj = res_pca_test$ind$coord
+
+train_proj <- as.data.frame(train_proj)
+test_proj <- as.data.frame(test_proj)
+
+test_proj$h13d <- test$h13d
+train_proj$h13d <- train$h13d 
+```
+
+##5.2. Prédiction avec PCR et validation du modèle:
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+model_pcr_train = lm(train$h13d ~., data= train_proj)
+predict_pcr = predict(model_pcr_train, newdata = test_proj)
+rmse_pcr = sqrt(mean(predict_pcr - test_proj$h13d)^2)
+rmse_pcr
+paste(round((rmse_pcr/(max(X$h13d)-min(X$h13d)))*100, 1), "% error" )
+```
+
+
+\setlength{\parindent}{10ex}On note un rmse de 0.079. Etant donné que les valeurs de "h13d"" sont comprises entre 0.14 et 2.28, cela signifie que nous avons environ 4% d'erreur dans l'estimation de la variable cette variable. 
+Nous procédons à une autre étude de prédiction afin de voir si nous ne pouvons pas obtenir un meilleur modèle prévisionnel. \par
+
+#6. Principal Component and Partial Least Squares Regression:
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+plsr_fit = plsr(train$h13d ~., data = train_stand[,2:28], scale=T, validation="CV")
+summary(plsr_fit)
+```
+On remarque que pour obtenir une variance expliquée de 99%, nous devons prendre les 8 premières composantes principales.
+
+##7.1. Prédiction avec PLSR et validation du modèle:
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+predict_plsr <- predict (plsr_fit, newdata=test_stand[,2:28])
+predict_plsr
+summary(plsr_fit)
+```
+On note que la plsr_fit n'a besoin que de 7 composantes principales pour expliquer 99% de la variance.
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+rmse_plsr = sqrt(mean(test$h13d - predict_plsr)^2)
+rmse_plsr
+paste(round((rmse_plsr/(max(X$h13d)-min(X$h13d)))*100, 1), "% error" )
+```
+\setlength{\parindent}{10ex}On note par contre un rmse de 0.42. Etant donné que les valeurs de h13d sont toujours comprises entre 0.14 et 2.28, cela signifie que nous avons environ 20% d'erreur dans l'estimation de la variable "h13d"" avec la méthode PLSR.
+
+
+Nous favoriserons donc le modèle PCR même si celui-ci requiert un plus grand nombre de composantes principales.
+
+Nous procédons à une troisième méthode de prédiction des données en effectuant une régression linéaire multiple directement sur les données initiales mais bien entendu, sur les valeurs quantitatives ainsi que sur les variables de 2 à 28.
+
+#8. Régression linéaire multiple:
+
+Une des hypothèses de détermination de la matrice  des coefficients de régression lors d'une regression linéaire multiple est que la matrice X des variables explicatives soit une matrice de plein rang. 
+
+Cependant l'analyse par composantes principales montre bien que la matrice initiale n'est pas une matrice de plein rang car on peut remarquer de fortes corrélations entre certaines variables. 
+
+Ainsi pour la regression linéaire multiple nous allons choisir un ensemble de variables indépendantes de manière à avoir une matrice X de plein rang.  
+
+On fait ainsi un choix arbitraire des variables indépendantes à partir du graphe de l'ACP des variables dans les deux premières dimensions. On a aussi utilisé la matrice de corrélation qui confirme notre choix.
+
+```{r warning = FALSE, error = FALSE, echo = FALSE, message=FALSE}
+df_correlmat <- cor(X %>% select_if(is.numeric)) %>% 
+  round(2)
+
+get_upper_tri <- function(correlmat){
+  correlmat[lower.tri(correlmat)]<- NA
+  return(correlmat)
+}
+
+library(reshape2, quietly = TRUE) # for 'melt' function
+df_correlmat <- df_correlmat %>% 
+  get_upper_tri() %>%
+  melt() 
+
+
+ggplot(data = df_correlmat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Pearson\nCorrelation", na.value= "white") +
+  theme_minimal() + 
+  theme() +
+  coord_fixed() +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.ticks = element_blank(),
+    legend.justification = c(1, 0),
+    legend.position = c(0.9, 0.2),
+    legend.direction = "horizontal")+
+  guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                               title.position = "top", title.hjust = 0.5)) +
+  labs(title = "Correlation matrix", subtitle = "Normalised (numeric) features")
+```
+
+Suite à l’étude des figures obtenues par ACP ainsi que de la `matrix-plot` nous avons décidé de garder seulement les colonnes indexées dans la variable `on_garde`. 
+```{r warning = FALSE, error = FALSE, echo = FALSE, message=FALSE, results = 'hide'}
+on_garde <- c(2, 4, 11, 15, 16, 17, 19, 23, 24, 25, 26, 27,28, 20)
+model_reg = lm(h13d~., data=train[,on_garde])
+summary(model_reg)
+```
+Nous avons créé notre modèle linéaire en utilisant les données `train` pour pouvoir effectuer une prédiction sur les données 'test' et évaluer le résultat.
+```{r warning = FALSE, error = FALSE, echo = FALSE, message=FALSE}
+predict_reg <- predict (model_reg, newdata= test[,on_garde])
+rmse_reg = sqrt(mean(test$h13d - predict_reg, na.rm=T )^2)
+rmse_reg
+paste(round((rmse_reg/(max(X$h13d)-min(X$h13d)))*100, 1), "% error" )
+```
+On obtient ainsi un modèle de régression linéaire multiple avec une erreur d'environ 2 %. 
+
+
+#9. Classification avec ellipses:
+On utilise la variable qualitative "dateheure" afin de voir si une classification des données est possible en fonction des jours de prélèvement des observations.
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+x_quant_stand <- X
+x_quant_stand [2:28] = t(apply(X[,2:28], MARGIN = 1, FUN=standardisation))
+res_pca_qualisup <- PCA(x_quant_stand[,1:28], quali.sup = 1, graph = FALSE)
+res_pca_qualisup$eig
+```
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide', eval=F}
+fviz_pca_ind(res_pca_qualisup, axes = c(1, 2), habillage = 1, addEllipses = TRUE)
+fviz_pca_ind(res_pca_qualisup, axes = c(1, 3), habillage = 1, addEllipses = TRUE)
+fviz_pca_ind(res_pca_qualisup, axes = c(2, 1), habillage = 1, addEllipses = TRUE)
+fviz_pca_ind(res_pca_qualisup, axes = c(2, 2), habillage = 1, addEllipses = TRUE)
+fviz_pca_ind(res_pca_qualisup, axes = c(2, 3), habillage = 1, addEllipses = TRUE)
+```
+
+```{r warning = FALSE, error = FALSE, echo = F, message=FALSE,}
+fviz_pca_ind(res_pca_qualisup, axes = c(1, 2), habillage = 1, addEllipses = TRUE)
+```
+Par souci d'espace et de clarté, nous n'affichons qu'un seul des 5 graphes
+
+On remarque que quel que soit le choix du plan, les classes sont superposées. Il est impossible de classifier les observations en fonction de la date de prélèvement des données. C'est pour cela que nous allons faire une AFD en fonction de la variable 'profondeur d'encrage des bouées'. 
+
+#10. HCPC classification non supervisée:(bonus)
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide', eval=F}
+pca_hcpc = PCA(X_stand[,2:28], ncp=5, scale.unit=T, graph=F)
+hcpc <- HCPC(pca_hcpc, nb.clust=1, consol=TRUE, iter.max=10, min=3, 
+     max=NULL, metric="euclidean", method="ward", order=TRUE,
+     graph.scale="inertia", nb.par=5, graph=TRUE, proba=0.05, 
+     cluster.CA="rows",kk=Inf,description=TRUE)
+```
+![Clasification non supervisée par HCPC ](hcpc.png)
+
+\setlength{\parindent}{10ex}Nous avons utilisé la méthode d’apprentissage non supervisé par clustering sur composantes principales avec  2 et 3 clusters. Nous avons finalement choisi la classification en deux catégories principales comme étant mieux adaptée à nos données. Pour mieux visualiser les caractéristiques des deux groupes houles on ajoute la colonne `clust` obtenue par HCPC à notre jeu de données en tant que variable qualitative et on visualise le résultat `biplot` d’une ACP, avec la colonne `clust` comme `habillage`. \par
+
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, eval=F}
+clust_data <- cbind(X_stand[, -c(1, 29)], hcpc$data.clust$clust )
+clust_pca_qualisup <- PCA(clust_data, ncp = 5, scale.unit = TRUE, 
+                          graph=FALSE, quali.sup= 28)
+fviz_pca_biplot(clust_pca_qualisup, axes=c(1,2), repel=FALSE, 
+                col.var="blue",  habillage = 28 )
+```
+
+
+![ACP biplot avec habillage corespondent aux clusters HCPC ](Biplot_HCPC.png)
+\pagebreak 
+
+
+
+\setlength{\parindent}{10ex}On remarque une distinction nette des deux catégories de houle. Le cluster 1 (en rouge) est caractérisé par la longueur directionnelle moyenne (`sigmam`), la longueur directionnelle du pic (`sigmap`) et la période de la vague de hauteur maximale (`tmaxd`). Le cluster 2 (en bleu) est caractérisé principalement par la hauteur maximale des  vagues (`hmaxd`), la hauteur significative du vague (`h13d`) et la direction de provenance au pic (`thetap`). On peur remarquer ainsi que les plus grandes vagues sont classées dans le groupe 2.\par 
+
+
+#11. Classification par rapport à la hauteur des bouées par LDA
+Nous avons commencé par une reconstruction de nos jeux de données en ajoutant une colonne supplémentaire `profond` avec les valeurs de la profondeur de l’encrage de la bouée.\par
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, results = 'hide'}
+profondeur <- c(130, 130, 40, 40, 70, 70,  52, 52, 50,50, 60, 60, 30, 30, 30,30, 
+                25, 25, 45, 45, 50,50,50, 50, 14, 14, 92, 92)
+
+test_profond <- NULL
+        for(i in index_test){
+          a <- read.csv2(filenames[i], header=T, stringsAsFactors=F, row.names= 1) %>% 
+          mutate(profond = profondeur[i])
+          test_profond <- rbind(test_profond,a)
+                          }
+                          
+train_profond <- NULL
+        for(i in index_train){
+          a <- read.csv2(filenames[i], header=T, stringsAsFactors=F, row.names= 1) %>%
+          mutate(profond = profondeur[i])
+          train_profond <- rbind(train_profond,a)
+                        }
+
+custom_clean2 <- function(df){
+  df <- df[,c(1:28 , 70)]
+  df$dateheure <- as.Date(df$dateheure)
+  df$thetap[is.na(df$thetap)] <- round(mean(df$thetap, na.rm=TRUE))
+  df$thetam[is.na(df$thetam)] <- round(mean(df$thetam, na.rm=TRUE))
+  df$sigmap[is.na(df$sigmap)] <- round(mean(df$sigmap, na.rm=TRUE))
+  df$sigmam[is.na(df$sigmam)] <- round(mean(df$sigmam, na.rm=TRUE))
+  df$profond <- factor(df$profond)
+  return(df)
+}
+test_profond <- custom_clean2(test_profond)
+train_profond <- custom_clean2(train_profond)
+
+test_profond_stand <- test_profond
+train_profond_stand <- train_profond
+
+test_profond_stand[,2:28] <- t(apply(test_profond_stand[,2:28], MARGIN = 1, FUN = standardisation))
+train_profond_stand[,2:28] <- t(apply(train_profond_stand[,2:28], MARGIN = 1, FUN = standardisation))
+```
+
+\setlength{\parindent}{10ex}On garde seulement une matrice de plein rang pour l'analyse discriminatoire linéaire en utilisant la variable `profond` comme cible . \par 
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+df <-  train_profond_stand[-c(25,26), c( on_garde, 29)] 
+df_test <- test_profond_stand[-c(25,26), c( on_garde, 29)]
+
+lda_fit <- lda(formula = profond ~., data = df)
+plda <- predict(object = lda_fit, newdata = df_test)
+
+prop_lda <- lda_fit$svd^2/sum(lda_fit$svd^2)
+sum(prop_lda[1:3]) 
+
+```
+
+\setlength{\parindent}{10ex}On remarque que les trois premiers axes discriminatoires expliquent 96% de la variance des observations, cependant l'analyse ne permet pas de différencier les classes de profondeur  \par  
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+dataset1 <- data.frame(profond = df_test[,"profond"], lda = plda$x) %>%
+            tidyr :: gather(key = groupe, value = lda_val, -1 )
+            
+ggplot(dataset1, aes(x= profond, y = lda_val, col = groupe, shape = groupe ))+
+  geom_point()
+         
+dataset = data.frame(profond = df_test[,"profond"], lda = plda$x)
+
+```
+\setlength{\parindent}{10ex}On peut remarquer une distribution uniforme des valeurs LDA avec la plupart des données provenant d’une profondeur de 50 m.\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+dataset = data.frame(profond = df_test[,"profond"], lda = plda$x)
+
+ggplot(dataset) + 
+geom_point(aes(lda.LD1, lda.LD2, colour = profond, shape = profond), size = 2.5) + 
+  labs(x = paste("LD1 (", percent(prop_lda[1]), ")", sep=""),
+       y = paste("LD2 (", percent(prop_lda[2]), ")", sep="")) +
+  theme_bw() +
+  labs(title = "LDA", subtitle = "Vagues")
+```
+\setlength{\parindent}{10ex}La représentation des valeurs de profondeur sur le plan des deux premiers axes discriminatoires ne permet pas non plus une distinction nette des classes. On peut ainsi déduire que la valeur `profondeur` n’est pas adaptée à une analyse LDA.\par 
+\setlength{\parindent}{10ex}Vue que la profondeur de l’encrage de la bouée n’est pas une donnée significative pour une analyse discriminatoire linéaire, nous avons décidé d’utiliser comme variable qualitative le groupe correspondant aux clusters déterminées par HCPC.\par
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, eval=FALSE}
+df <-  train_profond_stand[-c(25,26), c( on_garde, 29)] 
+df_test <- test_profond_stand[-c(25,26), c( on_garde, 29)]
+
+lda_train <- clust_data[index_train, c(on_garde)]
+lda_test <- clust_data[index_test, on_garde ]
+colnames(lda_train) <- c("h110d", "hrmsd", "etamax" , "tszmaxd","skew" ,  
+                         "kurt" ,"tp","kapa"  ,"thetap","thetam","sigmap", 
+                         "sigmam" , "cluster", "t02")
+ggplotLDA <- function(x){
+  if (!is.null(Terms <- x$terms)) {
+    data <- model.frame(x)
+    X <- model.matrix(delete.response(Terms), data)
+    g <- model.response(data)
+    xint <- match("(Intercept)", colnames(X), nomatch = 0L)
+    if (xint > 0L) 
+      X <- X[, -xint, drop = FALSE]}
+  means <- colMeans(x$means)
+  X <- scale(X, center = means, scale = FALSE) %*% x$scaling
+  rtrn <- as.data.frame(cbind(X,labels=as.character(g)))
+  rtrn <- data.frame(X,labels=as.character(g))
+  return(rtrn)}
+fit <- ggplotLDA(lda_fit_train)
+ggplot(fit, aes(LD1,fill=labels))+
+  geom_histogram()
+
+```
+![](lda_hist.png)
+
+\setlength{\parindent}{10ex}On remarque cette fois une séparation nette des deux catégories de vagues : en rouge les vagues caractérisées plutôt par la largeur directionnelle et en bleu les vagues caractérisées plutôt par la hauteur. Cela nous permet par la suite d’entraîner un model LDA de prédiction de la classe des vagues, sur les données `train` et de le tester sur les données `test`. Ce modèle peut être évalué par la matrice de confusion. \par
+
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE, eval=FALSE}
+lda_fit_train <- lda(formula = cluster ~., data = lda_train)
+plda_test <- predict(object = lda_fit_train, newdata = lda_test[,-13])
+```
+
+```{r warning = FALSE, error = FALSE, echo = TRUE, message=FALSE}
+
+lda_test_results <- c(2,2,1,2,1,2,1,2,2,1,1,2,1,1)
+test_real_class  <- c(2,2,1,2,1,2,1,2,2,2,1,2,1,1)
+table(lda_test_results, test_real_class )
+
+```
+\setlength{\parindent}{10ex}La matrice de confusion du modèle montre un seul résultat mal classé sur les 14 ce qui signifie une précision d’environ 7%.\par 
+\pagebreak
+
+#12 Conclusion 
+Lors de ce travail nous avons utilisé plusieurs techniques d’analyse multidimensionnelle pour pouvoir classer et prédire les caractéristiques des vagues.\par 
+\setlength{\parindent}{10ex}L’ACP nous à permis de voir la distribution des individus ainsi que des variables selon les axes principaux et d’identifier les variables co-dépendantes ainsi que les individus avec des caractéristiques similaires. \par
+\setlength{\parindent}{10ex}Nous avons réalisé également des simulations PCR et PLSR et nous avons comparé les résultats à un modèle linéaire multiple sur un groupe de variables indépendantes. Le modèle par régression linéaire multiple a produit ainsi la plus basse valeur de RMSE.\par 
+\setlength{\parindent}{10ex}L’analyse par HCPC nous à permis d’identifier deux classes principales des vagues : une caractérisée plutôt par la largeur directionnelle, l’autre caractérisée plutôt par la hauteur. Cette distinction dans les caractéristiques des deux classes de vagues a été possible en combinant les résultats de la HCPC avec l’ACP qualitative.\par 
+\setlength{\parindent}{10ex}Pour la dernière partie nous avons essayé une classification par LDA des différents groupes de profondeur d’encrage de la bouée. Vu que cela n’a pas donné de résultats interprétables, nous avons appliqué la LDA sur la variable `clust` obtenue par HCPC. Cette technique a montré une séparation nette des deux categories des vagues et nous a permis de développer un modèle de prédiction de la variable `clust` avec une precision de 7% sur notre jeu de données.\par 
+\setlength{\parindent}{10ex}Ce travail monte ainsi que l’on peut utiliser non seulement des techniques d’analyse multidimensionnelle indépendantes, mais qu'également ces techniques peuvent être combinées pour construire des modèles encore plus complexes.\par 
+
